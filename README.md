@@ -45,9 +45,7 @@ The app also stores your NotebookLM prompts.
 4. Publish directory is the project root.
 
 ## Data
-This version stores progress in browser localStorage. Export JSON backups from Progress Log / Settings.
-
-For true cross-device sync, the next upgrade should connect the app to Supabase (or another database) so your phone and laptop always show the same progress.
+V2 requires a private Netlify Identity login and stores each authenticated user's tracker state in Netlify Blobs. localStorage is retained only as a cache and one-time migration fallback. Export JSON backups from Progress Log / Settings.
 
 ## Files
 - index.html

@@ -1,0 +1,9 @@
+{
+  "name": "niti-readiness-tracker",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@netlify/blobs": "^11.0.1",
+    "@netlify/identity": "^2.0.0"
+  }
+}

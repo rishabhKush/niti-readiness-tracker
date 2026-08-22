@@ -7,7 +7,8 @@
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-<div class="app">
+<section id="authGate" class="auth-gate" aria-live="polite"><div class="auth-card"><h1>NITI Readiness</h1><p id="authMessage">Loading secure sign-in…</p><form id="loginForm" class="hidden"><label>Email<input id="loginEmail" class="input" type="email" autocomplete="email" required></label><label>Password<input id="loginPassword" class="input" type="password" autocomplete="current-password" required></label><button class="btn primary" type="submit">Log in</button></form><form id="inviteForm" class="hidden"><label>Set password<input id="invitePassword" class="input" type="password" autocomplete="new-password" required minlength="8"></label><button class="btn primary" type="submit">Accept invite</button></form></div></section>
+<div class="app" hidden>
   <aside class="sidebar">
     <div class="brand">
       <div class="brand-logo">N</div>
@@ -39,6 +40,8 @@
       </div>
       <div class="top-actions">
         <button id="rebalanceBtn" class="btn ghost">Smart rebalance</button>
+        <span id="syncStatus" class="sync-status">Loading</span>
+        <button id="logoutBtn" class="btn ghost">Log out</button>
         <button id="addTaskBtn" class="btn primary">+ Add task</button>
       </div>
     </header>
@@ -58,6 +61,6 @@
 </div>
 <div id="toast" class="toast hidden"></div>
 
-<script src="app.js"></script>
+<script type="module" src="app.js"></script>
 </body>
 </html>

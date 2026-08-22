@@ -1,6 +1,8 @@
 
-const STORAGE_KEY="niti-calendar-tracker-v2";
-let template=null,state=null,activeView="dashboard";
+import { acceptInvite, getUser, handleAuthCallback, login, logout, onAuthChange } from "https://esm.sh/@netlify/identity@2.0.0";
+
+const STORAGE_KEY="niti-calendar-tracker-v2", CACHE_KEY="niti-calendar-tracker-v2-cache";
+let template=null,state=null,activeView="dashboard",revision=0,saveTimer=null,pendingInviteToken=null;
 let calendarCursor=new Date();
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 
@@ -28,18 +30,27 @@ function health(){const cap=remainingCapacity(),work=remainingWork(),r=cap?work/
 
 async function init(){
   template=await fetch("data/roadmap.json").then(r=>r.json());
-  const saved=localStorage.getItem(STORAGE_KEY);state=saved?JSON.parse(saved):structuredClone(template);
+  const remote=await fetchState();
+  if(remote.state){state=remote.state;revision=remote.revision||0}
+  else {state=readCache()||structuredClone(template);await persistState(true)}
   state.history||=[];state.interviews||=[];state.lastActivity||=null;
   mergeNewTasks();
   const now=new Date();calendarCursor=new Date(now.getFullYear(),now.getMonth(),1);
   bind();render()
 }
 function mergeNewTasks(){const have=new Set(state.tasks.map(t=>t.id));template.tasks.forEach(t=>{if(!have.has(t.id))state.tasks.push(structuredClone(t))})}
-function save(msg){state.updatedAt=new Date().toISOString();localStorage.setItem(STORAGE_KEY,JSON.stringify(state));if(msg){state.history.unshift({at:new Date().toISOString(),message:msg});toast(msg)}}
+function readCache(){try{return JSON.parse(localStorage.getItem(STORAGE_KEY)||localStorage.getItem(CACHE_KEY)||"null")}catch{return null}}
+function cacheState(){localStorage.setItem(CACHE_KEY,JSON.stringify(state))}
+function setSync(message,kind="saved"){const el=$("#syncStatus");if(el){el.textContent=message;el.dataset.state=kind}}
+async function fetchState(){const r=await fetch("/.netlify/functions/tracker-state",{credentials:"same-origin"});if(r.status===401)throw new Error("Your session has expired. Please log in again.");if(!r.ok)throw new Error("Could not load your tracker state.");return r.json()}
+async function persistState(initial=false){setSync("Saving","saving");try{const r=await fetch("/.netlify/functions/tracker-state",{method:"PUT",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:JSON.stringify({state,baseRevision:revision})});if(r.status===409){setSync("Conflict — reload required","conflict");toast("A newer copy exists. Reload before saving again.");return false}if(!r.ok)throw new Error("Save failed");const data=await r.json();revision=data.revision;cacheState();setSync(`Saved ${new Date().toLocaleTimeString()}`,"saved");return true}catch(err){cacheState();setSync("Offline/error — cached locally","error");if(!initial)toast("Changes cached locally; sync will retry next load.");return false}}
+function queueSave(){clearTimeout(saveTimer);saveTimer=setTimeout(()=>persistState(),700)}
+function save(msg){state.updatedAt=new Date().toISOString();if(msg){state.history.unshift({at:new Date().toISOString(),message:msg});toast(msg)}cacheState();queueSave()}
 function bind(){
   $$(".nav").forEach(b=>b.onclick=()=>{activeView=b.dataset.view;$$(".nav").forEach(x=>x.classList.toggle("active",x===b));render()});
   $("#rebalanceBtn").onclick=()=>smartRebalance(true);
   $("#addTaskBtn").onclick=()=>openTaskEditor();
+  $("#logoutBtn").onclick=async()=>{await logout();location.reload()};
   $("#closeModal").onclick=closeModal;
   $("#modal").onclick=e=>{if(e.target.id==="modal")closeModal()}
 }
@@ -166,10 +177,10 @@ function toast(m){$("#toast").textContent=m;$("#toast").classList.remove("hidden
 window.openProgress=id=>{
   const t=task(id);openModal("Update task",`<div class="task-title">${esc(t.title)}</div><label>Progress %<input id="prog" class="input" type="number" min="0" max="100" value="${t.progress}"></label><label>Notes<textarea id="notes">${esc(t.notes||"")}</textarea></label><div class="task-actions"><button class="btn primary" onclick="saveProgress('${id}')">Save</button><button class="btn" onclick="finish('${id}')">Mark complete</button></div>`)
 }
-window.saveProgress=id=>{const t=task(id),old=t.progress;t.progress=clamp(Number($("#prog").value||0),0,100);t.notes=$("#notes").value.trim();t.status=t.progress>=100?"done":"todo";state.lastActivity=isoLocal();closeModal();save(`${t.title}: ${old}% → ${t.progress}%`);render()}
-window.finish=id=>{const t=task(id);t.progress=100;t.status="done";state.lastActivity=isoLocal();closeModal();save(`Completed: ${t.title}`);smartRebalance(false);render()}
+window.saveProgress=id=>{const t=task(id),old=t.progress;t.progress=clamp(Number($("#prog").value||0),0,100);t.notes=$("#notes").value.trim();t.status=t.progress>=100?"done":"todo";if(t.status==="done"&&!t.completedAt)t.completedAt=new Date().toISOString();state.lastActivity=isoLocal();closeModal();save(`${t.title}: ${old}% → ${t.progress}%`);render()}
+window.finish=id=>{const t=task(id);t.progress=100;t.status="done";t.completedAt=new Date().toISOString();state.lastActivity=isoLocal();closeModal();save(`Completed: ${t.title}`);smartRebalance(false);render()}
 window.moveTask=id=>{const t=task(id);openModal("Move task",`<div class="task-title">${esc(t.title)}</div><label>New date<input id="mdate" class="input" type="date" min="${isoLocal()}" max="${state.meta.targetDate}" value="${t.date}"></label><button class="btn primary" onclick="saveMove('${id}')">Move</button>`)}
-window.saveMove=id=>{const t=task(id),old=t.date;t.date=$("#mdate").value;state.lastActivity=isoLocal();closeModal();save(`Moved "${t.title}" from ${old} to ${t.date}`);render()}
+window.saveMove=id=>{const t=task(id),old=t.date;t.date=$("#mdate").value;t.manualMovedAt=new Date().toISOString();t.manualMovedFrom=old;state.lastActivity=isoLocal();closeModal();save(`Moved "${t.title}" from ${old} to ${t.date}`);render()}
 window.showDay=date=>{const ts=state.tasks.filter(t=>t.date===date);openModal(fmt(date),`<div class="task-list">${ts.map(taskCard).join("")}</div>`)}
 
 window.openTaskEditor=(id=null,date=null)=>{
@@ -237,7 +248,7 @@ function smartRebalance(show=true){
     }
     if(first)t.date=first
   }
-  save("Smart rebalance completed");
+  state.rebalance={lastRunAt:new Date().toISOString(),targetDate:state.meta.targetDate};save("Smart rebalance completed");
   if(show)toast("Plan redistributed to remaining capacity");
   render()
 }
@@ -247,4 +258,17 @@ window.exportData=()=>{const blob=new Blob([JSON.stringify(state,null,2)],{type:
 window.importData=e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=()=>{try{state=JSON.parse(r.result);save("Backup imported");render()}catch{toast("Invalid JSON")}};r.readAsText(f)}
 window.resetAll=()=>{if(!confirm("Reset all progress?"))return;state=structuredClone(template);state.history=[];state.interviews=[];save("Tracker reset");render()}
 
-init().catch(err=>{document.body.innerHTML=`<div style="padding:30px;font-family:sans-serif"><h1>Tracker could not start</h1><p>${esc(err.message)}</p><p>Deploy the folder to Netlify or serve it with a local web server.</p></div>`})
+async function startAuth(){
+  const message=$("#authMessage"),loginForm=$("#loginForm"),inviteForm=$("#inviteForm");
+  try{
+    const callback=await handleAuthCallback();
+    if(callback?.type==="invite"&&callback.token){pendingInviteToken=callback.token;message.textContent="Set a password to accept your invite.";inviteForm.classList.remove("hidden");return}
+    const user=await getUser();
+    if(!user){message.textContent="Private tracker — sign in with your invited email.";loginForm.classList.remove("hidden");return}
+    $("#authGate").hidden=true;$(".app").hidden=false;await init();
+  }catch(err){message.textContent=err.message||"Identity is not available yet.";loginForm.classList.remove("hidden")}
+}
+$("#loginForm").onsubmit=async e=>{e.preventDefault();const message=$("#authMessage");message.textContent="Signing in…";try{await login($("#loginEmail").value,$("#loginPassword").value);location.reload()}catch(err){message.textContent=err.message||"Login failed."}}
+$("#inviteForm").onsubmit=async e=>{e.preventDefault();try{await acceptInvite(pendingInviteToken,$("#invitePassword").value);location.reload()}catch(err){$("#authMessage").textContent=err.message||"Invite could not be accepted."}}
+onAuthChange((_event,user)=>{if(!user&&state)location.reload()});
+startAuth();
