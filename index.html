@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>NITI Aayog Readiness Tracker</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-logo">N</div>
+      <div>
+        <div class="brand-title">NITI Readiness</div>
+        <div class="brand-sub">Target: 31 Dec 2026</div>
+      </div>
+    </div>
+    <nav>
+      <button class="nav active" data-view="dashboard">Dashboard</button>
+      <button class="nav" data-view="roadmap">Roadmap</button>
+      <button class="nav" data-view="divisions">Division Progress</button>
+      <button class="nav" data-view="interviews">Interview Practice</button>
+      <button class="nav" data-view="prompts">ChatGPT / NotebookLM</button>
+      <button class="nav" data-view="history">Progress Log</button>
+      <button class="nav" data-view="settings">Settings</button>
+    </nav>
+    <div class="side-note">
+      <strong>Smart schedule</strong>
+      <span>Missed days are redistributed. Deadline stays fixed.</span>
+    </div>
+  </aside>
+
+  <main>
+    <header class="topbar">
+      <div>
+        <h1 id="pageTitle">Dashboard</h1>
+        <p id="pageSubtitle">See this month, today's priority and your full progress.</p>
+      </div>
+      <div class="top-actions">
+        <button id="rebalanceBtn" class="btn ghost">Smart rebalance</button>
+        <button id="addTaskBtn" class="btn primary">+ Add task</button>
+      </div>
+    </header>
+
+    <section id="view"></section>
+  </main>
+</div>
+
+<div id="modal" class="modal hidden">
+  <div class="modal-card">
+    <div class="modal-head">
+      <h2 id="modalTitle"></h2>
+      <button id="closeModal" class="close">×</button>
+    </div>
+    <div id="modalBody"></div>
+  </div>
+</div>
+<div id="toast" class="toast hidden"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
