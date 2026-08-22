@@ -1,5 +1,5 @@
 
-import { acceptInvite, getUser, handleAuthCallback, login, logout, onAuthChange } from "https://esm.sh/@netlify/identity@2.0.0";
+import { acceptInvite, getUser, handleAuthCallback, login, logout, onAuthChange, updateUser } from "https://esm.sh/@netlify/identity@2.0.0";
 
 const STORAGE_KEY="niti-calendar-tracker-v2", CACHE_KEY="niti-calendar-tracker-v2-cache";
 let template=null,state=null,activeView="dashboard",revision=0,saveTimer=null,pendingInviteToken=null;
@@ -259,10 +259,11 @@ window.importData=e=>{const f=e.target.files[0];if(!f)return;const r=new FileRea
 window.resetAll=()=>{if(!confirm("Reset all progress?"))return;state=structuredClone(template);state.history=[];state.interviews=[];save("Tracker reset");render()}
 
 async function startAuth(){
-  const message=$("#authMessage"),loginForm=$("#loginForm"),inviteForm=$("#inviteForm");
+  const message=$("#authMessage"),loginForm=$("#loginForm"),inviteForm=$("#inviteForm"),recoveryForm=$("#recoveryForm");
   try{
     const callback=await handleAuthCallback();
     if(callback?.type==="invite"&&callback.token){pendingInviteToken=callback.token;message.textContent="Set a password to accept your invite.";inviteForm.classList.remove("hidden");return}
+    if(callback?.type==="recovery"){message.textContent="Set a new password to continue.";recoveryForm.classList.remove("hidden");return}
     const user=await getUser();
     if(!user){message.textContent="Private tracker — sign in with your invited email.";loginForm.classList.remove("hidden");return}
     $("#authGate").hidden=true;$(".app").hidden=false;await init();
@@ -270,5 +271,6 @@ async function startAuth(){
 }
 $("#loginForm").onsubmit=async e=>{e.preventDefault();const message=$("#authMessage");message.textContent="Signing in…";try{await login($("#loginEmail").value,$("#loginPassword").value);location.reload()}catch(err){message.textContent=err.message||"Login failed."}}
 $("#inviteForm").onsubmit=async e=>{e.preventDefault();try{await acceptInvite(pendingInviteToken,$("#invitePassword").value);location.reload()}catch(err){$("#authMessage").textContent=err.message||"Invite could not be accepted."}}
+$("#recoveryForm").onsubmit=async e=>{e.preventDefault();const password=$("#recoveryPassword").value,confirmPassword=$("#recoveryConfirm").value,message=$("#authMessage");if(password.length<8){message.textContent="Use at least 8 characters.";return}if(password!==confirmPassword){message.textContent="Passwords do not match.";return}message.textContent="Saving new password…";try{await updateUser({password});history.replaceState(null,"",location.pathname+location.search);message.textContent="Password updated. Loading your tracker…";setTimeout(()=>startAuth(),500)}catch(err){message.textContent=err.message||"Password update failed."}}
 onAuthChange((_event,user)=>{if(!user&&state)location.reload()});
 startAuth();
