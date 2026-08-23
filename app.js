@@ -1,6 +1,7 @@
 
+import { buildTaskBriefs } from "./data/task-briefs.js";
 const STORAGE_KEY="niti-calendar-tracker-v2", CACHE_KEY="niti-calendar-tracker-v2-cache";
-let template=null,state=null,activeView="dashboard",revision=0,saveTimer=null,pendingInviteToken=null,identitySDK=null,authListener=false;
+let template=null,state=null,briefs={},activeView="dashboard",revision=0,saveTimer=null,pendingInviteToken=null,identitySDK=null,authListener=false;
 let calendarCursor=new Date();
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 let authAttempt=0;
@@ -40,7 +41,7 @@ async function init(setStage){
   setStage("Loading roadmap…");
   const roadmap=await fetch("data/roadmap.json");
   if(!roadmap.ok)throw new Error(`Roadmap load failed (${roadmap.status}).`);
-  try{template=await roadmap.json()}catch{throw new Error("Roadmap load failed: invalid data.")}
+  try{template=await roadmap.json();briefs=buildTaskBriefs(template.tasks)}catch{throw new Error("Roadmap load failed: invalid data.")}
   setStage("Loading saved tracker state…");
   const remote=await fetchState();
   if(remote.state){state=remote.state;revision=remote.revision||0}
@@ -82,7 +83,7 @@ function renderDashboard(){
       <div class="card"><div class="stat-label">Remaining work</div><div class="stat-value">${Math.round(remainingWork()/60)}h</div><div class="stat-foot">Remaining capacity ${Math.round(remainingCapacity()/60)}h</div></div>
       <div class="card"><div class="stat-label">Deadline health</div><div class="stat-value">${h[0]}</div><div class="stat-foot">Based on actual remaining capacity</div></div>
     </div>
-    ${n?`<div class="card next-action" style="margin-top:14px"><div><span class="badge today">NEXT ACTION</span><h2>${esc(n.title)}</h2><p>${esc(n.description||"")}</p><div class="next-meta"><span class="badge">${fmt(n.date)}</span><span class="badge">${n.estimatedMinutes} min</span><span class="badge">${esc(n.phase)}</span></div></div><div class="task-actions"><button class="btn primary" onclick="openProgress('${n.id}')">Update</button><button class="btn" onclick="copyCoach('${n.id}')">ChatGPT prompt</button></div></div>`:""}
+    ${n?`<div class="card next-action" style="margin-top:14px"><div><span class="badge today">NEXT ACTION</span><h2>${esc(n.title)}</h2><p>${esc(n.description||"")}</p><div class="next-meta"><span class="badge">${fmt(n.date)}</span><span class="badge">${n.estimatedMinutes} min</span><span class="badge">${esc(n.phase)}</span></div></div><div class="task-actions"><button class="btn primary" onclick="openTaskBrief('${n.id}')">Open brief</button></div></div>`:""}
     <div class="card calendar-card" style="margin-top:14px">
       <div class="calendar-toolbar">
         <div class="calendar-nav"><button class="btn small" onclick="changeMonth(-1)">←</button><button class="btn small" onclick="goCurrentMonth()">Today</button><button class="btn small" onclick="changeMonth(1)">→</button></div>
@@ -117,7 +118,7 @@ function renderCalendar(){
     const used=ts.filter(t=>t.status!=="done").reduce((a,t)=>a+t.estimatedMinutes*(1-(t.progress||0)/100),0);
     html+=`<div class="day-cell ${same?"":"other-month"} ${today?"today":""}" data-date="${iso}" onclick="cellClick(event,'${iso}')" ondragover="dragOver(event)" ondragleave="dragLeave(event)" ondrop="dropTask(event,'${iso}')">
       <div class="day-head"><span class="date-num">${d.getDate()}</span><span class="day-load">${used?Math.round(used)+"m":""}</span></div>
-      <div class="day-tasks">${shown.map(t=>`<div class="cal-task ${t.status==="done"?"done":""}" data-division="${t.division}" draggable="true" ondragstart="dragStart(event,'${t.id}')" onclick="event.stopPropagation();openProgress('${t.id}')">${esc(t.title)}</div>`).join("")}</div>
+      <div class="day-tasks">${shown.map(t=>`<div class="cal-task ${t.status==="done"?"done":""}" data-division="${t.division}" draggable="true" ondragstart="dragStart(event,'${t.id}')" onclick="event.stopPropagation();openTaskBrief('${t.id}')">${esc(t.title)}</div>`).join("")}</div>
       ${ts.length>4?`<div class="more" onclick="event.stopPropagation();showDay('${iso}')">+${ts.length-4} more</div>`:""}
     </div>`
   }
@@ -132,7 +133,7 @@ window.dragLeave=e=>e.currentTarget.classList.remove("drop-target")
 window.dropTask=(e,date)=>{e.preventDefault();e.currentTarget.classList.remove("drop-target");const id=e.dataTransfer.getData("text/plain"),t=task(id);if(!t)return;const old=t.date;t.date=date;state.lastActivity=isoLocal();save(`Moved "${t.title}" from ${old} to ${date}`);renderCalendar();renderStatsIfNeeded()}
 function renderStatsIfNeeded(){}
 
-function taskCard(t){return `<div class="task"><div class="task-title">${esc(t.title)}</div><div class="task-meta"><span class="badge">${fmt(t.date)}</span><span>${t.estimatedMinutes} min</span><span>${t.progress}%</span><span>${esc(t.phase)}</span></div>${bar(t.progress)}<div class="task-actions"><button class="btn small primary" onclick="openProgress('${t.id}')">Update</button><button class="btn small" onclick="copyCoach('${t.id}')">ChatGPT prompt</button><button class="btn small" onclick="moveTask('${t.id}')">Move</button></div></div>`}
+function taskCard(t){return `<div class="task"><div class="task-title">${esc(t.title)}</div><div class="task-meta"><span class="badge">${fmt(t.date)}</span><span>${t.estimatedMinutes} min</span><span>${t.progress}%</span><span>${esc(t.phase)}</span></div>${bar(t.progress)}<div class="task-actions"><button class="btn small primary" onclick="openTaskBrief('${t.id}')">Open brief</button><button class="btn small" onclick="moveTask('${t.id}')">Move</button></div></div>`}
 function renderRoadmap(){
   setHead("Roadmap","Filter the full learning journey by division, phase and status.");
   const phases=[...new Set(state.tasks.map(t=>t.phase))];
@@ -188,6 +189,9 @@ function openModal(title,body){$("#modalTitle").textContent=title;$("#modalBody"
 function closeModal(){$("#modal").classList.add("hidden")}
 function toast(m){$("#toast").textContent=m;$("#toast").classList.remove("hidden");setTimeout(()=>$("#toast").classList.add("hidden"),2200)}
 
+function briefFor(t){return briefs[t.id]||{objective:t.description||"Complete this custom task.",taskType:"CUSTOM",estimatedMinutes:t.estimatedMinutes,whyItMatters:"A user-created task; keep the scope practical.",steps:["Review the task description.","Complete the smallest useful output.","Record evidence for your future self."],resources:[],notebookLMPrompt:"No static curriculum brief is available for this custom task.",chatGPTPrompt:`Help me plan and test this custom task: ${t.title}`,deliverable:t.deliverable||"A short practical output.",completionCriteria:["Task output created."],evidencePrompt:"Add a note, reference link, or evidence.",prerequisites:[],nextTaskId:null,statusNote:"Custom task — no static curriculum metadata."}}
+window.openTaskBrief=id=>{const t=task(id);if(!t)return;const b=briefFor(t),resources=b.resources||[],required=resources.filter(r=>r.required),optional=resources.filter(r=>!r.required);const resourceList=list=>list.map(r=>`<div class="task"><strong>${esc(r.title)}</strong><div class="task-meta"><span class="badge">${esc(r.source||"To verify")}</span><span class="badge">${r.required?"Required":"Optional"}</span></div><p class="muted">${esc(r.instruction||"")}</p>${r.url?`<a class="btn small" href="${esc(r.url)}" target="_blank" rel="noopener">Open Resource</a>`:'<span class="muted">To verify</span>'}</div>`).join("")||"<p class='muted'>None.</p>";openModal(t.title,`<div class="task-meta"><span class="badge">${esc(b.taskType)}</span><span class="badge">${b.estimatedMinutes||t.estimatedMinutes} min</span></div><h3>Objective</h3><p>${esc(b.objective)}</p><h3>Why this matters</h3><p>${esc(b.whyItMatters)}</p><h3>Exact steps</h3><ol>${(b.steps||[]).map(x=>`<li>${esc(x)}</li>`).join("")}</ol><h3>Required resources</h3>${resourceList(required)}<h3>Optional resources</h3>${resourceList(optional)}<h3>NotebookLM prompt</h3><div class="prompt">${esc(b.notebookLMPrompt||"")}</div><button class="btn small" onclick="copyText(${JSON.stringify(b.notebookLMPrompt||"")})">Copy NotebookLM prompt</button><h3>ChatGPT prompt</h3><div class="prompt">${esc(b.chatGPTPrompt||"")}</div><button class="btn small" onclick="copyText(${JSON.stringify(b.chatGPTPrompt||"")})">Copy ChatGPT prompt</button><h3>Deliverable</h3><p>${esc(b.deliverable||"")}</p><h3>Done when</h3><ul>${(b.completionCriteria||[]).map(x=>`<li>${esc(x)}</li>`).join("")}</ul><h3>Evidence / notes</h3><label>Note<textarea id="briefNotes">${esc(t.notes||"")}</textarea></label><label>Output link / reference<input id="briefLink" class="input" value="${esc(t.evidenceLink||"")}"></label><label>Completion evidence<textarea id="briefEvidence">${esc(t.evidence||"")}</textarea></label><p class="muted">${esc(b.evidencePrompt||"")}</p><div class="task-actions"><button class="btn primary" onclick="saveBrief('${t.id}')">Save evidence</button><button class="btn" onclick="finish('${t.id}')">Mark complete</button></div><h3>Prerequisites</h3><p>${(b.prerequisites||[]).map(x=>esc(task(x)?.title||x)).join(", ")||"None."}</p><h3>Next task</h3><p>${b.nextTaskId?esc(task(b.nextTaskId)?.title||b.nextTaskId):"Follow the next unfinished scheduled task."}</p><p class="muted">${esc(b.statusNote||"")}</p>`)}
+window.saveBrief=id=>{const t=task(id);t.notes=$("#briefNotes").value.trim();t.evidenceLink=$("#briefLink").value.trim();t.evidence=$("#briefEvidence").value.trim();save(`Saved evidence: ${t.title}`);closeModal();render()}
 window.openProgress=id=>{
   const t=task(id);openModal("Update task",`<div class="task-title">${esc(t.title)}</div><label>Progress %<input id="prog" class="input" type="number" min="0" max="100" value="${t.progress}"></label><label>Notes<textarea id="notes">${esc(t.notes||"")}</textarea></label><div class="task-actions"><button class="btn primary" onclick="saveProgress('${id}')">Save</button><button class="btn" onclick="finish('${id}')">Mark complete</button></div>`)
 }
