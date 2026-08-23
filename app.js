@@ -3,6 +3,13 @@ const STORAGE_KEY="niti-calendar-tracker-v2", CACHE_KEY="niti-calendar-tracker-v
 let template=null,state=null,activeView="dashboard",revision=0,saveTimer=null,pendingInviteToken=null,identitySDK=null,authListener=false;
 let calendarCursor=new Date();
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
+let authAttempt=0;
+function setTopState(next,message=""){
+  const dashboard=next==="DASHBOARD",auth=$("#authGate"),app=$(".app");
+  auth.classList.toggle("hidden",dashboard);app.classList.toggle("hidden",!dashboard);
+  $("#loginForm").classList.toggle("hidden",next!=="LOGIN");$("#inviteForm").classList.toggle("hidden",next!=="INVITE");$("#recoveryForm").classList.toggle("hidden",next!=="RECOVERY");$("#authRetry").classList.toggle("hidden",next!=="ERROR");
+  $("#authMessage").textContent=dashboard?"":message;
+}
 const CALLBACK_HASH=/#(?:confirmation_token|recovery_token|invite_token|email_change_token|access_token)=/;
 const within=(promise,message,ms=10000)=>Promise.race([promise,new Promise((_,reject)=>setTimeout(()=>reject(new Error(message)),ms))]);
 async function loadIdentity(){try{return identitySDK||=await import("https://esm.sh/@netlify/identity@2.0.0")}catch{throw new Error("Identity initialization failed. Please retry.")}}
@@ -57,7 +64,7 @@ function bind(){
   $$(".nav").forEach(b=>b.onclick=()=>{activeView=b.dataset.view;$$(".nav").forEach(x=>x.classList.toggle("active",x===b));render()});
   $("#rebalanceBtn").onclick=()=>smartRebalance(true);
   $("#addTaskBtn").onclick=()=>openTaskEditor();
-  $("#logoutBtn").onclick=async()=>{await loadIdentity().then(({logout})=>logout());location.reload()};
+  $("#logoutBtn").onclick=async()=>{authAttempt++;setTopState("LOADING","Signing out…");await loadIdentity().then(({logout})=>logout());location.reload()};
   $("#closeModal").onclick=closeModal;
   $("#modal").onclick=e=>{if(e.target.id==="modal")closeModal()}
 }
@@ -266,22 +273,26 @@ window.importData=e=>{const f=e.target.files[0];if(!f)return;const r=new FileRea
 window.resetAll=()=>{if(!confirm("Reset all progress?"))return;state=structuredClone(template);state.history=[];state.interviews=[];save("Tracker reset");render()}
 
 async function startAuth(){
-  const message=$("#authMessage"),loginForm=$("#loginForm"),inviteForm=$("#inviteForm"),recoveryForm=$("#recoveryForm"),retry=$("#authRetry");
-  loginForm.classList.add("hidden");inviteForm.classList.add("hidden");recoveryForm.classList.add("hidden");retry.classList.add("hidden");message.textContent="Loading secure sign-in…";
+  const attempt=++authAttempt;
+  setTopState("LOADING","Loading secure sign-in…");
   try{
     const identity=await within(loadIdentity(),"Identity initialization timed out.");
+    if(attempt!==authAttempt)return;
     const {getUser,handleAuthCallback,onAuthChange}=identity;
     if(!authListener){onAuthChange((_event,user)=>{if(!user&&state)location.reload()});authListener=true}
     const callback=CALLBACK_HASH.test(location.hash)?await within(handleAuthCallback(),"Identity callback timed out."):null;
-    if(callback?.type==="invite"&&callback.token){pendingInviteToken=callback.token;message.textContent="Set a password to accept your invite.";inviteForm.classList.remove("hidden");return}
-    if(callback?.type==="recovery"){message.textContent="Set a new password to continue.";recoveryForm.classList.remove("hidden");return}
+    if(attempt!==authAttempt)return;
+    if(callback?.type==="invite"&&callback.token){pendingInviteToken=callback.token;setTopState("INVITE","Set a password to accept your invite.");return}
+    if(callback?.type==="recovery"){setTopState("RECOVERY","Set a new password to continue.");return}
     const user=await within(getUser(),"Session lookup timed out.");
-    if(!user){message.textContent="Private tracker — sign in with your invited email.";loginForm.classList.remove("hidden");return}
-    await within(init(text=>message.textContent=text),"Tracker bootstrap timed out.");$("#authGate").hidden=true;$(".app").hidden=false;
-  }catch(err){message.textContent=`Unable to finish sign-in: ${err.message||"please retry."}`;retry.classList.remove("hidden")}
+    if(attempt!==authAttempt)return;
+    if(!user){setTopState("LOGIN","Private tracker — sign in with your invited email.");return}
+    await within(init(text=>{if(attempt===authAttempt)setTopState("LOADING",text)}),"Tracker bootstrap timed out.");
+    if(attempt===authAttempt)setTopState("DASHBOARD");
+  }catch(err){if(attempt===authAttempt)setTopState("ERROR",`Unable to finish sign-in: ${err.message||"please retry."}`)}
 }
 $("#authRetry").onclick=startAuth;
-$("#loginForm").onsubmit=async e=>{e.preventDefault();const message=$("#authMessage");message.textContent="Signing in…";try{await loadIdentity().then(({login})=>login($("#loginEmail").value,$("#loginPassword").value));location.reload()}catch(err){message.textContent=err.message||"Login failed."}}
-$("#inviteForm").onsubmit=async e=>{e.preventDefault();try{await loadIdentity().then(({acceptInvite})=>acceptInvite(pendingInviteToken,$("#invitePassword").value));location.reload()}catch(err){$("#authMessage").textContent=err.message||"Invite could not be accepted."}}
-$("#recoveryForm").onsubmit=async e=>{e.preventDefault();const password=$("#recoveryPassword").value,confirmPassword=$("#recoveryConfirm").value,message=$("#authMessage");if(password.length<8){message.textContent="Use at least 8 characters.";return}if(password!==confirmPassword){message.textContent="Passwords do not match.";return}message.textContent="Saving new password…";try{await loadIdentity().then(({updateUser})=>updateUser({password}));history.replaceState(null,"",location.pathname+location.search);message.textContent="Password updated. Loading your tracker…";setTimeout(()=>startAuth(),500)}catch(err){message.textContent=err.message||"Password update failed."}}
+$("#loginForm").onsubmit=async e=>{e.preventDefault();setTopState("LOADING","Signing in…");try{await loadIdentity().then(({login})=>login($("#loginEmail").value,$("#loginPassword").value));location.reload()}catch(err){setTopState("LOGIN",err.message||"Login failed.")}}
+$("#inviteForm").onsubmit=async e=>{e.preventDefault();setTopState("LOADING","Accepting invite…");try{await loadIdentity().then(({acceptInvite})=>acceptInvite(pendingInviteToken,$("#invitePassword").value));location.reload()}catch(err){setTopState("INVITE",err.message||"Invite could not be accepted.")}}
+$("#recoveryForm").onsubmit=async e=>{e.preventDefault();const password=$("#recoveryPassword").value,confirmPassword=$("#recoveryConfirm").value;if(password.length<8){setTopState("RECOVERY","Use at least 8 characters.");return}if(password!==confirmPassword){setTopState("RECOVERY","Passwords do not match.");return}setTopState("LOADING","Saving new password…");try{await loadIdentity().then(({updateUser})=>updateUser({password}));history.replaceState(null,"",location.pathname+location.search);setTopState("LOADING","Password updated. Loading your tracker…");setTimeout(()=>startAuth(),500)}catch(err){setTopState("RECOVERY",err.message||"Password update failed.")}}
 startAuth();
