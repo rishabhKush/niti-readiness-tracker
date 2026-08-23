@@ -1,12 +1,11 @@
 
-import { acceptInvite, getUser, handleAuthCallback, login, logout, onAuthChange, updateUser } from "https://esm.sh/@netlify/identity@2.0.0";
-
 const STORAGE_KEY="niti-calendar-tracker-v2", CACHE_KEY="niti-calendar-tracker-v2-cache";
-let template=null,state=null,activeView="dashboard",revision=0,saveTimer=null,pendingInviteToken=null;
+let template=null,state=null,activeView="dashboard",revision=0,saveTimer=null,pendingInviteToken=null,identitySDK=null,authListener=false;
 let calendarCursor=new Date();
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 const CALLBACK_HASH=/#(?:confirmation_token|recovery_token|invite_token|email_change_token|access_token)=/;
 const within=(promise,message,ms=10000)=>Promise.race([promise,new Promise((_,reject)=>setTimeout(()=>reject(new Error(message)),ms))]);
+async function loadIdentity(){try{return identitySDK||=await import("https://esm.sh/@netlify/identity@2.0.0")}catch{throw new Error("Identity initialization failed. Please retry.")}}
 
 function isoLocal(d=new Date()){return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;}
 function pdate(s){return new Date(`${s}T12:00:00`)}
@@ -30,21 +29,27 @@ function remainingCapacity(){
 }
 function health(){const cap=remainingCapacity(),work=remainingWork(),r=cap?work/cap:999;return r<=.72?["Healthy","good"]:r<=.95?["Tight","warn"]:["At risk","danger"]}
 
-async function init(){
-  template=await fetch("data/roadmap.json").then(r=>r.json());
+async function init(setStage){
+  setStage("Loading roadmap…");
+  const roadmap=await fetch("data/roadmap.json");
+  if(!roadmap.ok)throw new Error(`Roadmap load failed (${roadmap.status}).`);
+  try{template=await roadmap.json()}catch{throw new Error("Roadmap load failed: invalid data.")}
+  setStage("Loading saved tracker state…");
   const remote=await fetchState();
   if(remote.state){state=remote.state;revision=remote.revision||0}
-  else {state=readCache()||structuredClone(template);await persistState(true)}
+  else {state=readCache()||structuredClone(template);setStage("Creating your tracker state…");await persistState(true)}
+  if(!state||!state.meta||!Array.isArray(state.tasks))throw new Error("State initialization failed: incomplete tracker data.");
   state.history||=[];state.interviews||=[];state.lastActivity||=null;
-  mergeNewTasks();
+  setStage("Rendering your tracker…");
+  try{mergeNewTasks()}catch{throw new Error("State initialization failed while merging curriculum.")}
   const now=new Date();calendarCursor=new Date(now.getFullYear(),now.getMonth(),1);
-  bind();render()
+  try{bind();render()}catch{throw new Error("Tracker render failed. Please retry.")}
 }
 function mergeNewTasks(){const have=new Set(state.tasks.map(t=>t.id));template.tasks.forEach(t=>{if(!have.has(t.id))state.tasks.push(structuredClone(t))})}
 function readCache(){try{return JSON.parse(localStorage.getItem(STORAGE_KEY)||localStorage.getItem(CACHE_KEY)||"null")}catch{return null}}
 function cacheState(){localStorage.setItem(CACHE_KEY,JSON.stringify(state))}
 function setSync(message,kind="saved"){const el=$("#syncStatus");if(el){el.textContent=message;el.dataset.state=kind}}
-async function fetchState(){const r=await fetch("/.netlify/functions/tracker-state",{credentials:"same-origin"});if(r.status===401)throw new Error("Your session has expired. Please log in again.");if(!r.ok)throw new Error("Could not load your tracker state.");return r.json()}
+async function fetchState(){let r;try{r=await fetch("/.netlify/functions/tracker-state",{credentials:"same-origin"})}catch{throw new Error("Tracker-state load failed: network error.")}if(r.status===401)throw new Error("Your session has expired. Please log in again.");if(!r.ok)throw new Error(`Tracker-state load failed (${r.status}).`);try{return await r.json()}catch{throw new Error("Tracker-state load failed: invalid response.")}}
 async function persistState(initial=false){setSync("Saving","saving");try{const r=await fetch("/.netlify/functions/tracker-state",{method:"PUT",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:JSON.stringify({state,baseRevision:revision})});if(r.status===409){setSync("Conflict — reload required","conflict");toast("A newer copy exists. Reload before saving again.");return false}if(!r.ok)throw new Error("Save failed");const data=await r.json();revision=data.revision;cacheState();setSync(`Saved ${new Date().toLocaleTimeString()}`,"saved");return true}catch(err){cacheState();setSync("Offline/error — cached locally","error");if(!initial)toast("Changes cached locally; sync will retry next load.");return false}}
 function queueSave(){clearTimeout(saveTimer);saveTimer=setTimeout(()=>persistState(),700)}
 function save(msg){state.updatedAt=new Date().toISOString();if(msg){state.history.unshift({at:new Date().toISOString(),message:msg});toast(msg)}cacheState();queueSave()}
@@ -52,7 +57,7 @@ function bind(){
   $$(".nav").forEach(b=>b.onclick=()=>{activeView=b.dataset.view;$$(".nav").forEach(x=>x.classList.toggle("active",x===b));render()});
   $("#rebalanceBtn").onclick=()=>smartRebalance(true);
   $("#addTaskBtn").onclick=()=>openTaskEditor();
-  $("#logoutBtn").onclick=async()=>{await logout();location.reload()};
+  $("#logoutBtn").onclick=async()=>{await loadIdentity().then(({logout})=>logout());location.reload()};
   $("#closeModal").onclick=closeModal;
   $("#modal").onclick=e=>{if(e.target.id==="modal")closeModal()}
 }
@@ -264,17 +269,19 @@ async function startAuth(){
   const message=$("#authMessage"),loginForm=$("#loginForm"),inviteForm=$("#inviteForm"),recoveryForm=$("#recoveryForm"),retry=$("#authRetry");
   loginForm.classList.add("hidden");inviteForm.classList.add("hidden");recoveryForm.classList.add("hidden");retry.classList.add("hidden");message.textContent="Loading secure sign-in…";
   try{
+    const identity=await within(loadIdentity(),"Identity initialization timed out.");
+    const {getUser,handleAuthCallback,onAuthChange}=identity;
+    if(!authListener){onAuthChange((_event,user)=>{if(!user&&state)location.reload()});authListener=true}
     const callback=CALLBACK_HASH.test(location.hash)?await within(handleAuthCallback(),"Identity callback timed out."):null;
     if(callback?.type==="invite"&&callback.token){pendingInviteToken=callback.token;message.textContent="Set a password to accept your invite.";inviteForm.classList.remove("hidden");return}
     if(callback?.type==="recovery"){message.textContent="Set a new password to continue.";recoveryForm.classList.remove("hidden");return}
     const user=await within(getUser(),"Session lookup timed out.");
     if(!user){message.textContent="Private tracker — sign in with your invited email.";loginForm.classList.remove("hidden");return}
-    message.textContent="Loading your tracker…";await within(init(),"Tracker state load timed out.");$("#authGate").hidden=true;$(".app").hidden=false;
+    await within(init(text=>message.textContent=text),"Tracker bootstrap timed out.");$("#authGate").hidden=true;$(".app").hidden=false;
   }catch(err){message.textContent=`Unable to finish sign-in: ${err.message||"please retry."}`;retry.classList.remove("hidden")}
 }
 $("#authRetry").onclick=startAuth;
-$("#loginForm").onsubmit=async e=>{e.preventDefault();const message=$("#authMessage");message.textContent="Signing in…";try{await login($("#loginEmail").value,$("#loginPassword").value);location.reload()}catch(err){message.textContent=err.message||"Login failed."}}
-$("#inviteForm").onsubmit=async e=>{e.preventDefault();try{await acceptInvite(pendingInviteToken,$("#invitePassword").value);location.reload()}catch(err){$("#authMessage").textContent=err.message||"Invite could not be accepted."}}
-$("#recoveryForm").onsubmit=async e=>{e.preventDefault();const password=$("#recoveryPassword").value,confirmPassword=$("#recoveryConfirm").value,message=$("#authMessage");if(password.length<8){message.textContent="Use at least 8 characters.";return}if(password!==confirmPassword){message.textContent="Passwords do not match.";return}message.textContent="Saving new password…";try{await updateUser({password});history.replaceState(null,"",location.pathname+location.search);message.textContent="Password updated. Loading your tracker…";setTimeout(()=>startAuth(),500)}catch(err){message.textContent=err.message||"Password update failed."}}
-onAuthChange((_event,user)=>{if(!user&&state)location.reload()});
+$("#loginForm").onsubmit=async e=>{e.preventDefault();const message=$("#authMessage");message.textContent="Signing in…";try{await loadIdentity().then(({login})=>login($("#loginEmail").value,$("#loginPassword").value));location.reload()}catch(err){message.textContent=err.message||"Login failed."}}
+$("#inviteForm").onsubmit=async e=>{e.preventDefault();try{await loadIdentity().then(({acceptInvite})=>acceptInvite(pendingInviteToken,$("#invitePassword").value));location.reload()}catch(err){$("#authMessage").textContent=err.message||"Invite could not be accepted."}}
+$("#recoveryForm").onsubmit=async e=>{e.preventDefault();const password=$("#recoveryPassword").value,confirmPassword=$("#recoveryConfirm").value,message=$("#authMessage");if(password.length<8){message.textContent="Use at least 8 characters.";return}if(password!==confirmPassword){message.textContent="Passwords do not match.";return}message.textContent="Saving new password…";try{await loadIdentity().then(({updateUser})=>updateUser({password}));history.replaceState(null,"",location.pathname+location.search);message.textContent="Password updated. Loading your tracker…";setTimeout(()=>startAuth(),500)}catch(err){message.textContent=err.message||"Password update failed."}}
 startAuth();
