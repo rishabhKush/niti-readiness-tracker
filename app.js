@@ -5,6 +5,8 @@ const STORAGE_KEY="niti-calendar-tracker-v2", CACHE_KEY="niti-calendar-tracker-v
 let template=null,state=null,activeView="dashboard",revision=0,saveTimer=null,pendingInviteToken=null;
 let calendarCursor=new Date();
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
+const CALLBACK_HASH=/#(?:confirmation_token|recovery_token|invite_token|email_change_token|access_token)=/;
+const within=(promise,message,ms=10000)=>Promise.race([promise,new Promise((_,reject)=>setTimeout(()=>reject(new Error(message)),ms))]);
 
 function isoLocal(d=new Date()){return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;}
 function pdate(s){return new Date(`${s}T12:00:00`)}
@@ -259,16 +261,18 @@ window.importData=e=>{const f=e.target.files[0];if(!f)return;const r=new FileRea
 window.resetAll=()=>{if(!confirm("Reset all progress?"))return;state=structuredClone(template);state.history=[];state.interviews=[];save("Tracker reset");render()}
 
 async function startAuth(){
-  const message=$("#authMessage"),loginForm=$("#loginForm"),inviteForm=$("#inviteForm"),recoveryForm=$("#recoveryForm");
+  const message=$("#authMessage"),loginForm=$("#loginForm"),inviteForm=$("#inviteForm"),recoveryForm=$("#recoveryForm"),retry=$("#authRetry");
+  loginForm.classList.add("hidden");inviteForm.classList.add("hidden");recoveryForm.classList.add("hidden");retry.classList.add("hidden");message.textContent="Loading secure sign-in…";
   try{
-    const callback=await handleAuthCallback();
+    const callback=CALLBACK_HASH.test(location.hash)?await within(handleAuthCallback(),"Identity callback timed out."):null;
     if(callback?.type==="invite"&&callback.token){pendingInviteToken=callback.token;message.textContent="Set a password to accept your invite.";inviteForm.classList.remove("hidden");return}
     if(callback?.type==="recovery"){message.textContent="Set a new password to continue.";recoveryForm.classList.remove("hidden");return}
-    const user=await getUser();
+    const user=await within(getUser(),"Session lookup timed out.");
     if(!user){message.textContent="Private tracker — sign in with your invited email.";loginForm.classList.remove("hidden");return}
-    $("#authGate").hidden=true;$(".app").hidden=false;await init();
-  }catch(err){message.textContent=err.message||"Identity is not available yet.";loginForm.classList.remove("hidden")}
+    message.textContent="Loading your tracker…";await within(init(),"Tracker state load timed out.");$("#authGate").hidden=true;$(".app").hidden=false;
+  }catch(err){message.textContent=`Unable to finish sign-in: ${err.message||"please retry."}`;retry.classList.remove("hidden")}
 }
+$("#authRetry").onclick=startAuth;
 $("#loginForm").onsubmit=async e=>{e.preventDefault();const message=$("#authMessage");message.textContent="Signing in…";try{await login($("#loginEmail").value,$("#loginPassword").value);location.reload()}catch(err){message.textContent=err.message||"Login failed."}}
 $("#inviteForm").onsubmit=async e=>{e.preventDefault();try{await acceptInvite(pendingInviteToken,$("#invitePassword").value);location.reload()}catch(err){$("#authMessage").textContent=err.message||"Invite could not be accepted."}}
 $("#recoveryForm").onsubmit=async e=>{e.preventDefault();const password=$("#recoveryPassword").value,confirmPassword=$("#recoveryConfirm").value,message=$("#authMessage");if(password.length<8){message.textContent="Use at least 8 characters.";return}if(password!==confirmPassword){message.textContent="Passwords do not match.";return}message.textContent="Saving new password…";try{await updateUser({password});history.replaceState(null,"",location.pathname+location.search);message.textContent="Password updated. Loading your tracker…";setTimeout(()=>startAuth(),500)}catch(err){message.textContent=err.message||"Password update failed."}}
